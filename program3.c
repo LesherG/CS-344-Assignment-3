@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 struct Command {
 	char* command;
@@ -20,14 +21,25 @@ struct Command {
 	int execInBackground;
 };
 
+struct ProcessNode{
+	struct ProcessNode* next;
+	struct ProcessNode* prev;
+
+	int pid;
+};
 
 
 void command_loop();
+void reap_children(int process_number, struct ProcessNode **processes, int *exitStatus);
 struct Command* parse_command(int argc, char** args);
 char** parse_words(char* string, int count);
 int count_words(char* string);
 void expand_PID_var(char* command, int PID);
 void free_command(struct Command *command);
+//---LL functions---
+void appendProcess(struct ProcessNode **head, int pid);
+void removeProcess(struct ProcessNode **head, int pid);
+void freeLL(struct ProcessNode* head);
 
 int main(int argc, char** argv){
 	command_loop();
@@ -48,8 +60,8 @@ void command_loop(){
 	int terminationSignal = -1;
 
 
-	size_t bgProcesses_size = 1;
-	int* bgProcesses = (int*)malloc(bgProcesses_size*sizeof(int));
+	size_t bgProcesses_size = 0;
+	struct ProcessNode *head = NULL;
 
 	do{
 		printf(": ");
@@ -59,6 +71,7 @@ void command_loop(){
 		input[strlen(input)-1] = '\0';	//get the command inputed
 
 		if(input[0] == '#' || strcmp(input, "") == 0){ 	//If it's blank or a comment
+			reap_children(bgProcesses_size, &head, &exitStatus);
 			continue;
 		}
 
@@ -102,13 +115,52 @@ void command_loop(){
 					exit(1);
 					break;
 				case 0:
+					//--setup file redirects--
+					if(command->execInBackground == 1){
+						if(command->useInputFile == 0){
+							strcpy(command->inputFile, "/dev/null/");
+							command->useInputFile = 1;
+						}
+						if(command->useOutputFile == 0){
+							strcpy(command->outputFile, "/dev/null/");
+							command->useOutputFile = 1;
+						}
+					}
+
+					if(command->useInputFile == 1){
+						int sourceFD = open(command->inputFile, O_RDONLY);
+						if(sourceFD == -1){
+							perror("Input file redirection failed, exiting\n");
+							exit(1);
+						}
+						int result = dup2(sourceFD, 0); 	//Redirect stdin to source file
+						if(result == -1) {
+							perror("input dup2 failed, exiting\n");
+							exit(1);
+						}
+					}
+					if(command->useOutputFile == 1){
+						int targetFD = open(command->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+						if(targetFD == -1){
+							perror("Output file redirection failed, exiting\n");	
+							exit(1);
+						}
+						int result = dup2(targetFD, 1);		//Redirect stdout to target file
+						if(result == -1){
+
+							perror("output dup2 failed, exiting\n");
+							exit(1);
+						}
+					}
+
+					//--execute commands---
 					execvp(command->command, command->argv);
 					printf("Failed to execute command.\n");
 					exit(1);
 					break;
 				default:
 					if(command->execInBackground == 0){
-						int childStatus
+						int childStatus;
 						pid_t child = waitpid(childPID, &childStatus, 0);
 						if(WIFEXITED(childStatus)){
 							exitStatus = WEXITSTATUS(childStatus);
@@ -116,12 +168,15 @@ void command_loop(){
 					} else {
 						pid_t child = waitpid(childPID, &exitStatus, WNOHANG);
 						printf("Background PID is %d\n", childPID);
+						appendProcess(&head, childPID);
+
 						//TODO: Add bg processes to the array, and make a reap function
 
 					}
 			}
 		}
 
+		reap_children(bgProcesses_size, &head, &exitStatus);
 
 
 
@@ -130,7 +185,23 @@ void command_loop(){
 
 
 	free(input);	
-	free(bgProcesses);
+	freeLL(head);
+}
+
+
+void reap_children(int process_number, struct ProcessNode **processes, int *exitStatus){
+	struct ProcessNode *curr = *processes;
+	while(curr != NULL){		
+		int childStatus;
+		pid_t child = waitpid(curr->pid, &childStatus, WNOHANG);
+		if(WIFEXITED(childStatus)){
+			printf("Process with pid %d has ended.\n",curr->pid);
+			removeProcess(processes, curr->pid);
+			*exitStatus = WEXITSTATUS(childStatus);
+
+		}
+		curr = curr->next;
+	}
 }
 
 struct Command* parse_command(int argc, char** args){
@@ -251,4 +322,59 @@ void free_command(struct Command *command){
 	free(command->argv);
 	free(command);
 	
+}
+
+
+void appendProcess(struct ProcessNode **head, int pid){
+	if(*head == NULL){
+		struct ProcessNode *newNode = (struct ProcessNode*)malloc(sizeof(struct ProcessNode));
+		newNode->prev = NULL;
+		newNode->next = NULL;
+		newNode->pid = pid;
+		*head = newNode;
+		return;
+	} else {
+		struct ProcessNode *curr = *head;
+		while(curr->next != NULL){
+			curr = curr->next;
+		}
+		struct ProcessNode *newNode = (struct ProcessNode*)malloc(sizeof(struct ProcessNode));
+		newNode->prev = curr;
+		newNode->next = NULL;
+		newNode->pid = pid;
+		curr->next = newNode;
+	}
+}
+
+void removeProcess(struct ProcessNode **head, int pid){
+	struct ProcessNode *curr = *head;
+	if(curr != NULL && curr->pid == pid){
+		if(curr->next){
+			curr->next->prev = NULL;
+		}
+		*head = curr->next;
+		free(curr);
+		return;
+	}
+
+	while(curr != NULL && curr->pid != pid){
+		curr = curr->next;
+	}
+
+	curr->prev->next = curr->next;
+	curr->next->prev = curr->prev;
+
+	free(curr);
+
+}
+
+
+void freeLL(struct ProcessNode* head){
+	if(head == NULL){
+		return;
+	}
+	if(head->next != NULL){
+		freeLL(head->next);
+	}
+	free(head);
 }
