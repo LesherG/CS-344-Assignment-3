@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <sys/wait.h>
 
 struct Command {
 	char* command;
@@ -36,8 +37,16 @@ void command_loop(){
 	int shellPID = getpid();
 	char* input = (char*)malloc(2048*sizeof(char));
 	size_t size;
-	int exitStatus = -1;
+
+	int exitLoop = -1;
+
 	char* cwd = (char*)malloc(PATH_MAX*sizeof(char));
+	getcwd(cwd, PATH_MAX*sizeof(char));
+
+	
+	int exitStatus = 0;		//-1 => there was some termination signal
+	int terminationSignal = -1;
+
 
 	size_t bgProcesses_size = 1;
 	int* bgProcesses = (int*)malloc(bgProcesses_size*sizeof(int));
@@ -60,11 +69,11 @@ void command_loop(){
 		char** argv = parse_words(input, argc);
 		struct Command *command = parse_command(argc, argv);
 
-		if(strcmp(command->command, "exit") == 0){
+		if(strcmp(command->command, "exit") == 0){		//---exit---
 			//TODO: Cleanup Background processes
-			exitStatus = 0;
+			exitLoop = 0;
 			free_command(command);
-		} else if(strcmp(command->command, "cd") == 0){
+		} else if(strcmp(command->command, "cd") == 0){		//---cd---
 			char* directory;
 			if(command->argc == 1){
 				directory = getenv("HOME");
@@ -78,14 +87,46 @@ void command_loop(){
 				printf("An error has occured.\n");
 			}
 
-		} else if(strcmp(command->command, "status") == 0){
-			//TODO: Something
+		} else if(strcmp(command->command, "status") == 0){ 	//---status---
+			//TODO: makesure this works correctly with the signals
+			if(exitStatus == -1){
+				printf("Terminated by signal %d\n", terminationSignal);
+			} else {
+				printf("Exit value %d\n", exitStatus);
+			}
+		} else {						//---Other Commands---
+			pid_t childPID = fork();	
+			switch(childPID){
+				case -1:
+					perror("fork() failed. Hull breach.\n");
+					exit(1);
+					break;
+				case 0:
+					execvp(command->command, command->argv);
+					printf("Failed to execute command.\n");
+					exit(1);
+					break;
+				default:
+					if(command->execInBackground == 0){
+						int childStatus
+						pid_t child = waitpid(childPID, &childStatus, 0);
+						if(WIFEXITED(childStatus)){
+							exitStatus = WEXITSTATUS(childStatus);
+						}
+					} else {
+						pid_t child = waitpid(childPID, &exitStatus, WNOHANG);
+						printf("Background PID is %d\n", childPID);
+						//TODO: Add bg processes to the array, and make a reap function
+
+					}
+			}
 		}
 
 
 
 
-	} while (exitStatus < 0);
+
+	} while (exitLoop < 0);
 
 
 	free(input);	
