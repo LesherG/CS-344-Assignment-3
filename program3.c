@@ -40,6 +40,7 @@ void free_command(struct Command *command);
 void appendProcess(struct ProcessNode **head, int pid);
 void removeProcess(struct ProcessNode **head, int pid);
 void freeLL(struct ProcessNode* head);
+void printProcesses(struct ProcessNode* head);
 
 int main(int argc, char** argv){
 	command_loop();
@@ -107,6 +108,8 @@ void command_loop(){
 			} else {
 				printf("Exit value %d\n", exitStatus);
 			}
+		} else if(strcmp(command->command, "proc") == 0){
+			printProcesses(head);
 		} else {						//---Other Commands---
 			pid_t childPID = fork();	
 			switch(childPID){
@@ -116,13 +119,16 @@ void command_loop(){
 					break;
 				case 0:
 					//--setup file redirects--
+					
 					if(command->execInBackground == 1){
 						if(command->useInputFile == 0){
-							strcpy(command->inputFile, "/dev/null/");
+							command->inputFile = (char*)malloc(20*sizeof(char));
+							strcpy(command->inputFile, "/dev/null");
 							command->useInputFile = 1;
 						}
 						if(command->useOutputFile == 0){
-							strcpy(command->outputFile, "/dev/null/");
+							command->outputFile = (char*)malloc(20*sizeof(char));
+							strcpy(command->outputFile, "/dev/null");
 							command->useOutputFile = 1;
 						}
 					}
@@ -169,9 +175,7 @@ void command_loop(){
 						pid_t child = waitpid(childPID, &exitStatus, WNOHANG);
 						printf("Background PID is %d\n", childPID);
 						appendProcess(&head, childPID);
-
-						//TODO: Add bg processes to the array, and make a reap function
-
+						
 					}
 			}
 		}
@@ -194,13 +198,16 @@ void reap_children(int process_number, struct ProcessNode **processes, int *exit
 	while(curr != NULL){		
 		int childStatus;
 		pid_t child = waitpid(curr->pid, &childStatus, WNOHANG);
-		if(WIFEXITED(childStatus)){
+		if(child != 0){
 			printf("Process with pid %d has ended.\n",curr->pid);
-			removeProcess(processes, curr->pid);
+			int currPID = curr->pid;
+			curr = curr->next;
+			removeProcess(processes, currPID);
 			*exitStatus = WEXITSTATUS(childStatus);
 
-		}
-		curr = curr->next;
+		} else {
+			curr = curr->next;
+		}	
 	}
 }
 
@@ -266,7 +273,6 @@ char** parse_words(char* string, int count){
 
 }
 
-
 /* utility function for counting words in a string
  *
  * Args:
@@ -324,7 +330,6 @@ void free_command(struct Command *command){
 	
 }
 
-
 void appendProcess(struct ProcessNode **head, int pid){
 	if(*head == NULL){
 		struct ProcessNode *newNode = (struct ProcessNode*)malloc(sizeof(struct ProcessNode));
@@ -377,4 +382,16 @@ void freeLL(struct ProcessNode* head){
 		freeLL(head->next);
 	}
 	free(head);
+}
+
+void printProcesses(struct ProcessNode* head){
+	printf("Processes: \n");
+	if(head == NULL){
+		return;
+	}
+	struct ProcessNode* curr = head;
+	while(curr != NULL){
+		printf("pid: %d\n", curr->pid);
+		curr = curr->next;
+	}
 }
