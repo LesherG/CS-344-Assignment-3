@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 struct Command {
 	char* command;
@@ -18,11 +19,13 @@ struct Command {
 	int execInBackground;
 };
 
+
+
 void command_loop();
-struct Command* parse_command(int argc, char** argv);
+struct Command* parse_command(int argc, char** args);
 char** parse_words(char* string, int count);
 int count_words(char* string);
-void expandPIDVar(char* command, int PID);
+void expand_PID_var(char* command, int PID);
 void free_command(struct Command *command);
 
 int main(int argc, char** argv){
@@ -34,6 +37,10 @@ void command_loop(){
 	char* input = (char*)malloc(2048*sizeof(char));
 	size_t size;
 	int exitStatus = -1;
+	char* cwd = (char*)malloc(PATH_MAX*sizeof(char));
+
+	size_t bgProcesses_size = 1;
+	int* bgProcesses = (int*)malloc(bgProcesses_size*sizeof(int));
 
 	do{
 		printf(": ");
@@ -46,47 +53,75 @@ void command_loop(){
 			continue;
 		}
 
+
+		expand_PID_var(input, shellPID);
+
 		int argc = count_words(input);
-		struct Command *command = parse_command(argc, parse_words(input, argc));
+		char** argv = parse_words(input, argc);
+		struct Command *command = parse_command(argc, argv);
+
+		if(strcmp(command->command, "exit") == 0){
+			//TODO: Cleanup Background processes
+			exitStatus = 0;
+			free_command(command);
+		} else if(strcmp(command->command, "cd") == 0){
+			char* directory;
+			if(command->argc == 1){
+				directory = getenv("HOME");
+			} else {
+				directory = command->argv[1];
+			}
+			int ret = chdir(directory);
+			if(ret == 0){
+				printf("Directory changed to %s\n", getcwd(cwd, PATH_MAX*sizeof(char) ));
+			} else {
+				printf("An error has occured.\n");
+			}
+
+		} else if(strcmp(command->command, "status") == 0){
+			//TODO: Something
+		}
 
 
-		exitStatus = 0;
+
+
 	} while (exitStatus < 0);
 
 
 	free(input);	
+	free(bgProcesses);
 }
 
-struct Command* parse_command(int argc, char** argv){
-	struct Command *command = (struct Command*)malloc(sizeof(command));
+struct Command* parse_command(int argc, char** args){
+	struct Command *command = (struct Command*)malloc(sizeof(struct Command));
 	
-	command->command = argv[0];
+	command->command = args[0];
 	command->useInputFile = 0;
 	command->useOutputFile = 0;
 	command->execInBackground = 0;
 
 	command->argc = 1;
 	command->argv = (char**)malloc(sizeof(char*));
-	command->argv[0] = argv[0];
+	command->argv[0] = args[0];
 	
 	int i = 1;
 	for( ; i < argc; i++){
-		if(strcmp(argv[i], "<") == 0){
+		if(strcmp(args[i], "<") == 0){
 			command->useInputFile = 1;
 			i++;
-			command->inputFile = argv[i];
+			command->inputFile = args[i];
 
-		} else if(strcmp(argv[i], ">") == 0){
+		} else if(strcmp(args[i], ">") == 0){
 			command->useOutputFile = 1;
 			i++;
-			command->outputFile = argv[i];
+			command->outputFile = args[i];
 
-		} else if(strcmp(argv[i], "&") == 0){
+		} else if(strcmp(args[i], "&") == 0){
 			command->execInBackground = 1;
 		} else {
 			command->argc++;
 			command->argv = (char**)realloc(command->argv, (command->argc)*sizeof(char*));
-			command->argv[command->argc-1] = argv[i];		
+			command->argv[command->argc-1] = args[i];		
 		}
 
 	}	
@@ -143,7 +178,7 @@ int count_words(char* string){
 /* Adapted from https://stackoverflow.com/questions/32413667/replace-all-occurrences-of-a-substring-in-a-string-in-c
  *
  */
-void expandPIDVar(char* command, int PID){
+void expand_PID_var(char* command, int PID){
 	int count, n;
 	n = PID;
 	count = 0;
